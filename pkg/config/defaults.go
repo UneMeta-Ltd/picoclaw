@@ -113,6 +113,10 @@ func DefaultConfig() *Config {
 				AllowFrom:      FlexibleStringSlice{},
 				ReplyTimeout:   5,
 			},
+			Web: WebConfig{
+				Enabled:   false,
+				AllowFrom: FlexibleStringSlice{},
+			},
 		},
 		Providers: ProvidersConfig{
 			OpenAI: OpenAIProviderConfig{WebSearch: true},
