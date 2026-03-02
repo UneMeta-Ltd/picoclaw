@@ -68,7 +68,7 @@ func (w *WebChannel) Start(ctx context.Context) error {
 		}
 	}()
 
-	w.setRunning(true)
+	w.SetRunning(true)
 	return nil
 }
 
@@ -76,7 +76,7 @@ func (w *WebChannel) Stop(ctx context.Context) error {
 	if w.server != nil {
 		_ = w.server.Shutdown(ctx)
 	}
-	w.setRunning(false)
+	w.SetRunning(false)
 	return nil
 }
 
@@ -94,6 +94,11 @@ func (w *WebChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
 }
 
 func (w *WebChannel) handleChat(wr http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		setCORSHeaders(wr)
+		wr.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(wr, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -132,16 +137,20 @@ func (w *WebChannel) handleChat(wr http.ResponseWriter, r *http.Request) {
 	// Save user message to history.
 	w.appendHistory(body.SessionID, chatMessage{Role: "user", Content: body.Message})
 
-	// Publish inbound message to the bus.
-	w.BaseChannel.HandleMessage(body.SessionID, chatID, body.Message, nil, nil)
-
-	// Set SSE headers.
+	// Set SSE headers before publishing to avoid race with fast responses.
+	setCORSHeaders(wr)
 	wr.Header().Set("Content-Type", "text/event-stream")
 	wr.Header().Set("Cache-Control", "no-cache")
 	wr.Header().Set("Connection", "keep-alive")
-	wr.Header().Set("Access-Control-Allow-Origin", "*")
 	wr.WriteHeader(http.StatusOK)
 	flusher.Flush()
+
+	// Publish inbound message to the bus.
+	w.BaseChannel.HandleMessage(r.Context(),
+		bus.Peer{Kind: "direct", ID: body.SessionID},
+		requestID, body.SessionID, chatID, body.Message,
+		nil, nil,
+	)
 
 	timeout := time.After(120 * time.Second)
 
@@ -190,6 +199,11 @@ func (w *WebChannel) handleChat(wr http.ResponseWriter, r *http.Request) {
 }
 
 func (w *WebChannel) handleHistory(wr http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		setCORSHeaders(wr)
+		wr.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if r.Method != http.MethodGet {
 		http.Error(wr, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -203,11 +217,17 @@ func (w *WebChannel) handleHistory(wr http.ResponseWriter, r *http.Request) {
 
 	messages := w.getHistory(sessionID)
 
+	setCORSHeaders(wr)
 	wr.Header().Set("Content-Type", "application/json")
-	wr.Header().Set("Access-Control-Allow-Origin", "*")
 	json.NewEncoder(wr).Encode(map[string]any{
 		"messages": messages,
 	})
+}
+
+func setCORSHeaders(w http.ResponseWriter) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 }
 
 func (w *WebChannel) appendHistory(sessionID string, msg chatMessage) {
