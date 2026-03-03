@@ -160,14 +160,26 @@ func TestShellTool_SudoInstallAllowedByGuard(t *testing.T) {
 	}
 }
 
-func TestShellTool_SudoGenericCommandAllowedByGuard(t *testing.T) {
+func TestShellTool_MultipleSudoPackageCommandsAllowedByGuard(t *testing.T) {
 	tool, err := NewExecTool("", false)
 	if err != nil {
 		t.Errorf("unable to configure exec tool: %s", err)
 	}
 
-	if guardErr := tool.guardCommand("sudo echo hello", ""); guardErr != "" {
-		t.Fatalf("expected sudo command to be allowed, got: %s", guardErr)
+	if guardErr := tool.guardCommand("sudo apt update && sudo apt install -y curl", ""); guardErr != "" {
+		t.Fatalf("expected chained sudo package commands to be allowed, got: %s", guardErr)
+	}
+}
+
+func TestShellTool_SudoNonPackageCommandBlocked(t *testing.T) {
+	tool, err := NewExecTool("", false)
+	if err != nil {
+		t.Errorf("unable to configure exec tool: %s", err)
+	}
+
+	guardErr := tool.guardCommand("sudo echo hello", "")
+	if !strings.Contains(guardErr, "sudo is restricted") {
+		t.Fatalf("expected sudo non-package command to be blocked, got: %s", guardErr)
 	}
 }
 

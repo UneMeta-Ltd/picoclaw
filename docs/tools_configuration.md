@@ -73,6 +73,16 @@ By default, PicoClaw blocks the following dangerous commands:
 - Git: `git push`, `git force`
 - Other: `eval`, `source *.sh`
 
+### Sudo Policy
+
+`sudo` is available for package management only, for example:
+
+- `sudo apk add curl`
+- `sudo apt install -y jq`
+- `sudo dnf install -y git`
+
+Non-package `sudo` commands are blocked by the safety guard.
+
 ### Configuration Example
 
 ```json
