@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +27,19 @@ type CronTool struct {
 	channel     string
 	chatID      string
 	mu          sync.RWMutex
+}
+
+var supportedCronChannels = map[string]struct{}{
+	"web":      {},
+	"telegram": {},
+	"discord":  {},
+	"slack":    {},
+	"feishu":   {},
+	"line":     {},
+	"onebot":   {},
+	"qq":       {},
+	"dingtalk": {},
+	"wecom":    {},
 }
 
 // NewCronTool creates a new CronTool
@@ -55,7 +69,7 @@ func (t *CronTool) Name() string {
 
 // Description returns the tool description
 func (t *CronTool) Description() string {
-	return "Schedule reminders, tasks, or system commands. IMPORTANT: When user asks to be reminded or scheduled, you MUST call this tool. Use 'at_seconds' for one-time reminders (e.g., 'remind me in 10 minutes' → at_seconds=600). Use 'every_seconds' ONLY for recurring tasks (e.g., 'every 2 hours' → every_seconds=7200). Use 'cron_expr' for complex recurring schedules. Use 'command' to execute shell commands directly."
+	return "Schedule reminders, tasks, or system commands. IMPORTANT: When user asks to be reminded or scheduled, you MUST call this tool. Use 'at_seconds' for one-time reminders (e.g., 'remind me in 10 minutes' -> at_seconds=600). Use 'every_seconds' ONLY for recurring tasks (e.g., 'every 2 hours' -> every_seconds=7200). Use 'cron_expr' for complex recurring schedules. Use 'command' to execute shell commands directly. Optional target_channel/target_chat_id can deliver notifications to a specific channel."
 }
 
 // Parameters returns the tool parameters schema
@@ -95,6 +109,14 @@ func (t *CronTool) Parameters() map[string]any {
 			"deliver": map[string]any{
 				"type":        "boolean",
 				"description": "If true, send message directly to channel. If false, let agent process message (for complex tasks). Default: true",
+			},
+			"target_channel": map[string]any{
+				"type":        "string",
+				"description": "Optional target channel for notification delivery (e.g. telegram, discord, slack, feishu, line, web). Defaults to current conversation channel.",
+			},
+			"target_chat_id": map[string]any{
+				"type":        "string",
+				"description": "Optional target chat/user id for the target channel. Required when target_channel differs from current channel.",
 			},
 		},
 		"required": []string{"action"},
@@ -137,10 +159,6 @@ func (t *CronTool) addJob(args map[string]any) *ToolResult {
 	channel := t.channel
 	chatID := t.chatID
 	t.mu.RUnlock()
-
-	if channel == "" || chatID == "" {
-		return ErrorResult("no session context (channel/chat_id not set). Use this tool in an active conversation.")
-	}
 
 	message, ok := args["message"].(string)
 	if !ok || message == "" {
@@ -191,6 +209,26 @@ func (t *CronTool) addJob(args map[string]any) *ToolResult {
 		deliver = false
 	}
 
+	targetChannel := channel
+	targetChatID := chatID
+	rawTargetChatID, hasTargetChatID := args["target_chat_id"].(string)
+	if rawTargetChannel, ok := args["target_channel"].(string); ok && rawTargetChannel != "" {
+		normalized, err := normalizeCronTargetChannel(rawTargetChannel)
+		if err != nil {
+			return ErrorResult(err.Error())
+		}
+		targetChannel = normalized
+	}
+	if hasTargetChatID && rawTargetChatID != "" {
+		targetChatID = rawTargetChatID
+	}
+	if targetChannel == "" || targetChatID == "" {
+		return ErrorResult("target channel/chat_id not resolved. Use this tool in an active conversation or provide target_channel + target_chat_id.")
+	}
+	if targetChannel != channel && (!hasTargetChatID || strings.TrimSpace(rawTargetChatID) == "") {
+		return ErrorResult("target_chat_id is required when target_channel differs from current channel")
+	}
+
 	// Truncate message for job name (max 30 chars)
 	messagePreview := utils.Truncate(message, 30)
 
@@ -199,8 +237,8 @@ func (t *CronTool) addJob(args map[string]any) *ToolResult {
 		schedule,
 		message,
 		deliver,
-		channel,
-		chatID,
+		targetChannel,
+		targetChatID,
 	)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("Error adding job: %v", err))
@@ -213,6 +251,18 @@ func (t *CronTool) addJob(args map[string]any) *ToolResult {
 	}
 
 	return SilentResult(fmt.Sprintf("Cron job added: %s (id: %s)", job.Name, job.ID))
+}
+
+func normalizeCronTargetChannel(channel string) (string, error) {
+	v := strings.TrimSpace(strings.ToLower(channel))
+	switch v {
+	case "lark":
+		v = "feishu"
+	}
+	if _, ok := supportedCronChannels[v]; ok {
+		return v, nil
+	}
+	return "", fmt.Errorf("unsupported target_channel: %s", channel)
 }
 
 func (t *CronTool) listJobs() *ToolResult {

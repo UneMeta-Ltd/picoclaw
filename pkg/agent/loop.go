@@ -616,6 +616,7 @@ func (al *AgentLoop) runLLMIteration(
 ) (string, int, error) {
 	iteration := 0
 	var finalContent string
+	forcedToolRetry := false
 
 	for iteration < agent.MaxIterations {
 		iteration++
@@ -772,6 +773,23 @@ func (al *AgentLoop) runLLMIteration(
 			})
 		// Check if no tool calls - we're done
 		if len(response.ToolCalls) == 0 {
+			if !forcedToolRetry {
+				if hint, shouldRetry := buildToolEnforcementHint(opts.UserMessage, response.Content); shouldRetry {
+					forcedToolRetry = true
+					messages = append(messages, providers.Message{
+						Role:    "user",
+						Content: hint,
+					})
+					logger.WarnCF("agent", "Tool enforcement retry triggered",
+						map[string]any{
+							"agent_id":  agent.ID,
+							"iteration": iteration,
+							"hint":      hint,
+						})
+					continue
+				}
+			}
+
 			finalContent = response.Content
 			logger.InfoCF("agent", "LLM response without tool calls (direct answer)",
 				map[string]any{
@@ -926,6 +944,71 @@ func (al *AgentLoop) runLLMIteration(
 	return finalContent, iteration, nil
 }
 
+func buildToolEnforcementHint(userMessage, llmResponse string) (string, bool) {
+	intent := detectToolRequiredIntent(userMessage)
+	if intent == "" {
+		return "", false
+	}
+
+	if llmResponse == "" || looksLikeManualRefusal(llmResponse) {
+		switch intent {
+		case "schedule":
+			return "System enforcement: the user asked for a timer/reminder/scheduled notification. You MUST call the cron tool now (add action) and create the schedule, instead of asking the user to run scripts manually.", true
+		case "exec":
+			return "System enforcement: the user asked you to execute/operate commands. You MUST call tools (exec/cron) now and perform the task directly when safety guards allow. Do not output manual copy-paste steps.", true
+		}
+	}
+	return "", false
+}
+
+func detectToolRequiredIntent(s string) string {
+	v := strings.ToLower(strings.TrimSpace(s))
+	if v == "" {
+		return ""
+	}
+
+	scheduleKeywords := []string{
+		"remind", "reminder", "timer", "schedule", "cron", "notify", "notification",
+		"定时", "提醒", "闹钟", "通知", "每隔", "定时器",
+	}
+	for _, kw := range scheduleKeywords {
+		if strings.Contains(v, kw) {
+			return "schedule"
+		}
+	}
+
+	execKeywords := []string{
+		"run ", "execute", "install", "deploy", "script", "command",
+		"运行", "执行", "安装", "部署", "脚本", "命令",
+	}
+	for _, kw := range execKeywords {
+		if strings.Contains(v, kw) {
+			return "exec"
+		}
+	}
+
+	return ""
+}
+
+func looksLikeManualRefusal(s string) bool {
+	v := strings.ToLower(strings.TrimSpace(s))
+	if v == "" {
+		return true
+	}
+
+	markers := []string{
+		"你只需", "请手动", "复制以下命令", "无法直接在这里", "当前环境不支持", "终端交互输入",
+		"security policy", "i cannot directly", "cannot directly", "run this in your terminal",
+		"copy and run", "manually run", "unsupported input", "input is not supported",
+	}
+	for _, m := range markers {
+		if strings.Contains(v, m) {
+			return true
+		}
+	}
+	return false
+}
+
 // updateToolContexts updates the context for tools that need channel/chatID info.
 func (al *AgentLoop) updateToolContexts(agent *AgentInstance, channel, chatID string) {
 	// Use ContextualTool interface instead of type assertions
@@ -942,6 +1025,11 @@ func (al *AgentLoop) updateToolContexts(agent *AgentInstance, channel, chatID st
 	if tool, ok := agent.Tools.Get("subagent"); ok {
 		if st, ok := tool.(tools.ContextualTool); ok {
 			st.SetContext(channel, chatID)
+		}
+	}
+	if tool, ok := agent.Tools.Get("cron"); ok {
+		if ct, ok := tool.(tools.ContextualTool); ok {
+			ct.SetContext(channel, chatID)
 		}
 	}
 }
