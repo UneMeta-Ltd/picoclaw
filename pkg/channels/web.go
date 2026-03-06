@@ -255,6 +255,7 @@ func (w *WebChannel) handleHistory(wr http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.ensureSession(sessionID)
 	messages := w.getHistory(sessionID)
 
 	setCORSHeaders(wr)
@@ -262,6 +263,14 @@ func (w *WebChannel) handleHistory(wr http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(wr).Encode(map[string]any{
 		"messages": messages,
 	})
+}
+
+func (w *WebChannel) ensureSession(sessionID string) {
+	sid := strings.TrimSpace(sessionID)
+	if sid == "" {
+		return
+	}
+	w.history.LoadOrStore(sid, &sessionHistory{})
 }
 
 func setCORSHeaders(w http.ResponseWriter) {

@@ -135,3 +135,25 @@ func TestWebChannelSend_BroadcastsToKnownSessions(t *testing.T) {
 		t.Fatalf("session-b history tail = %q, want timer done", historyB[len(historyB)-1].Content)
 	}
 }
+
+func TestWebChannelBroadcastAfterEnsureSession(t *testing.T) {
+	w := &WebChannel{}
+	w.ensureSession("session-c")
+
+	err := w.Send(context.Background(), bus.OutboundMessage{
+		Channel: "web",
+		ChatID:  "*",
+		Content: "timer done",
+	})
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	history := w.getHistory("session-c")
+	if len(history) != 1 {
+		t.Fatalf("history len = %d, want 1", len(history))
+	}
+	if history[0].Role != "assistant" || history[0].Content != "timer done" {
+		t.Fatalf("unexpected history[0]=%+v", history[0])
+	}
+}
