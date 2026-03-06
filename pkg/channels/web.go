@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,7 +33,7 @@ type sessionHistory struct {
 type WebChannel struct {
 	*BaseChannel
 	config  config.WebConfig
-	pending sync.Map // chatID -> chan string
+	pending sync.Map // sessionID -> chan string
 	history sync.Map // sessionID -> *sessionHistory
 	server  *http.Server
 }
@@ -81,7 +82,12 @@ func (w *WebChannel) Stop(ctx context.Context) error {
 }
 
 func (w *WebChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
-	if ch, ok := w.pending.Load(msg.ChatID); ok {
+	sessionID := sessionIDFromChatID(msg.ChatID)
+	if sessionID == "" {
+		return nil
+	}
+
+	if ch, ok := w.pending.Load(sessionID); ok {
 		select {
 		case ch.(chan string) <- msg.Content:
 		case <-time.After(5 * time.Second):
@@ -89,6 +95,9 @@ func (w *WebChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
 				"chat_id": msg.ChatID,
 			})
 		}
+	}
+	if strings.TrimSpace(msg.Content) != "" {
+		w.appendHistory(sessionID, chatMessage{Role: "assistant", Content: msg.Content})
 	}
 	return nil
 }
@@ -128,7 +137,7 @@ func (w *WebChannel) handleChat(wr http.ResponseWriter, r *http.Request) {
 	}
 
 	requestID := uuid.New().String()
-	chatID := body.SessionID + ":" + requestID
+	chatID := body.SessionID
 
 	responseCh := make(chan string, 10)
 	w.pending.Store(chatID, responseCh)
@@ -157,8 +166,6 @@ func (w *WebChannel) handleChat(wr http.ResponseWriter, r *http.Request) {
 	// Wait for the agent's response.
 	select {
 	case content := <-responseCh:
-		w.appendHistory(body.SessionID, chatMessage{Role: "assistant", Content: content})
-
 		data, _ := json.Marshal(map[string]string{"content": content})
 		fmt.Fprintf(wr, "data: %s\n\n", data)
 		flusher.Flush()
@@ -170,7 +177,6 @@ func (w *WebChannel) handleChat(wr http.ResponseWriter, r *http.Request) {
 		for {
 			select {
 			case extra := <-responseCh:
-				w.appendHistory(body.SessionID, chatMessage{Role: "assistant", Content: extra})
 				data, _ := json.Marshal(map[string]string{"content": extra})
 				fmt.Fprintf(wr, "data: %s\n\n", data)
 				flusher.Flush()
@@ -228,6 +234,17 @@ func setCORSHeaders(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+}
+
+func sessionIDFromChatID(chatID string) string {
+	trimmed := strings.TrimSpace(chatID)
+	if trimmed == "" {
+		return ""
+	}
+	if idx := strings.Index(trimmed, ":"); idx > 0 {
+		return trimmed[:idx]
+	}
+	return trimmed
 }
 
 func (w *WebChannel) appendHistory(sessionID string, msg chatMessage) {
