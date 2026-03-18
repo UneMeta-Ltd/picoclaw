@@ -20,7 +20,25 @@ RUN make build
 # ============================================================
 FROM alpine:3.23
 
-RUN apk add --no-cache ca-certificates tzdata curl
+RUN apk add --no-cache \
+    ca-certificates \
+    tzdata \
+    curl \
+    sudo \
+    bash \
+    git \
+    github-cli \
+    jq \
+    tmux \
+    python3 \
+    py3-pip \
+    nodejs \
+    npm \
+    chromium \
+    chromium-chromedriver
+
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
+    PLAYWRIGHT_BROWSERS_PATH=0
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
@@ -30,14 +48,19 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 COPY --from=builder /src/build/picoclaw /usr/local/bin/picoclaw
 
 # Create non-root user and group
-RUN addgroup -g 1000 picoclaw && \
-    adduser -D -u 1000 -G picoclaw picoclaw
+RUN addgroup -g 1000 meowclaw && \
+    adduser -D -u 1000 -G meowclaw meowclaw && \
+    mkdir -p /etc/sudoers.d && \
+    echo "meowclaw ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/meowclaw && \
+    chmod 0440 /etc/sudoers.d/meowclaw
 
 # Switch to non-root user
-USER picoclaw
+USER meowclaw
 
 # Run onboard to create initial directories and config
-RUN /usr/local/bin/picoclaw onboard
+RUN mkdir -p /home/meowclaw/.meowclaw && \
+    ln -sfn /home/meowclaw/.meowclaw /home/meowclaw/.picoclaw && \
+    /usr/local/bin/picoclaw onboard
 
 ENTRYPOINT ["picoclaw"]
 CMD ["gateway"]

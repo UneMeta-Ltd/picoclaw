@@ -76,13 +76,20 @@ By default, PicoClaw blocks the following dangerous commands:
 - System operations: `shutdown`, `reboot`, `poweroff`
 - Command substitution: `$()`, `${}`, backticks
 - Pipe to shell: `| sh`, `| bash`
-- Privilege escalation: `sudo`, `chmod`, `chown`
+- Permission changes: `chmod`, `chown`
 - Process control: `pkill`, `killall`, `kill -9`
 - Remote operations: `curl | sh`, `wget | sh`, `ssh`
-- Package management: `apt`, `yum`, `dnf`, `npm install -g`, `pip install --user`
 - Containers: `docker run`, `docker exec`
 - Git: `git push`, `git force`
 - Other: `eval`, `source *.sh`
+
+### Sudo Policy
+
+`sudo` commands are allowed. Dangerous commands are still blocked by the safety guard patterns above.
+
+- `sudo apk add curl`
+- `sudo apt install -y jq`
+- `sudo echo ok`
 
 ### Configuration Example
 

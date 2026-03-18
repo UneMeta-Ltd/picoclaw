@@ -100,10 +100,20 @@ func NewAgentInstance(
 	sessionsDir := filepath.Join(workspace, "sessions")
 	sessions := initSessionStore(sessionsDir)
 
-	mcpDiscoveryActive := cfg.Tools.MCP.Enabled && cfg.Tools.MCP.Discovery.Enabled
-	contextBuilder := NewContextBuilder(workspace).WithToolDiscovery(
-		mcpDiscoveryActive && cfg.Tools.MCP.Discovery.UseBM25,
-		mcpDiscoveryActive && cfg.Tools.MCP.Discovery.UseRegex,
+	contextTimezone := ""
+	if cfg != nil {
+		contextTimezone = cfg.Session.Timezone
+	}
+	mcpDiscoveryBM25 := false
+	mcpDiscoveryRegex := false
+	if cfg != nil {
+		mcpDiscoveryActive := cfg.Tools.MCP.Enabled && cfg.Tools.MCP.Discovery.Enabled
+		mcpDiscoveryBM25 = mcpDiscoveryActive && cfg.Tools.MCP.Discovery.UseBM25
+		mcpDiscoveryRegex = mcpDiscoveryActive && cfg.Tools.MCP.Discovery.UseRegex
+	}
+	contextBuilder := NewContextBuilder(workspace, contextTimezone).WithToolDiscovery(
+		mcpDiscoveryBM25,
+		mcpDiscoveryRegex,
 	)
 
 	agentID := routing.DefaultAgentID

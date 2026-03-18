@@ -202,6 +202,10 @@ func registerSharedTools(
 			agent.Tools.Register(sendFileTool)
 		}
 
+		if cfg.Tools.IsToolEnabled("meowclaw_runtime_status") {
+			agent.Tools.Register(tools.NewMeowClawRuntimeStatusTool(cfg))
+		}
+
 		// Skill discovery and installation tools
 		skills_enabled := cfg.Tools.IsToolEnabled("skills")
 		find_skills_enable := cfg.Tools.IsToolEnabled("find_skills")
@@ -874,7 +878,10 @@ func (al *AgentLoop) runAgentLoop(
 		}
 	}
 
-	// 1. Build messages (skip history for heartbeat)
+	// 1. Update tool contexts before building prompts/executing tools.
+	al.updateToolContexts(agent, opts.Channel, opts.ChatID)
+
+	// 2. Build messages (skip history for heartbeat)
 	var history []providers.Message
 	var summary string
 	if !opts.NoHistory {
@@ -895,10 +902,10 @@ func (al *AgentLoop) runAgentLoop(
 	maxMediaSize := cfg.Agents.Defaults.GetMaxMediaSize()
 	messages = resolveMediaRefs(messages, al.mediaStore, maxMediaSize)
 
-	// 2. Save user message to session
+	// 3. Save user message to session
 	agent.Sessions.AddMessage(opts.SessionKey, "user", opts.UserMessage)
 
-	// 3. Run LLM iteration loop
+	// 4. Run LLM iteration loop
 	finalContent, iteration, err := al.runLLMIteration(ctx, agent, messages, opts)
 	if err != nil {
 		return "", err
@@ -1008,6 +1015,7 @@ func (al *AgentLoop) runLLMIteration(
 ) (string, int, error) {
 	iteration := 0
 	var finalContent string
+	forcedToolRetry := false
 
 	// Determine effective model tier for this conversation turn.
 	// selectCandidates evaluates routing once and the decision is sticky for
@@ -1196,6 +1204,23 @@ func (al *AgentLoop) runLLMIteration(
 			})
 		// Check if no tool calls - then check reasoning content if any
 		if len(response.ToolCalls) == 0 {
+			if !forcedToolRetry {
+				if hint, shouldRetry := buildToolEnforcementHint(opts.UserMessage, response.Content); shouldRetry {
+					forcedToolRetry = true
+					messages = append(messages, providers.Message{
+						Role:    "user",
+						Content: hint,
+					})
+					logger.WarnCF("agent", "Tool enforcement retry triggered",
+						map[string]any{
+							"agent_id":  agent.ID,
+							"iteration": iteration,
+							"hint":      hint,
+						})
+					continue
+				}
+			}
+
 			finalContent = response.Content
 			if finalContent == "" && response.ReasoningContent != "" {
 				finalContent = response.ReasoningContent
@@ -1410,6 +1435,71 @@ func (al *AgentLoop) runLLMIteration(
 	return finalContent, iteration, nil
 }
 
+func buildToolEnforcementHint(userMessage, llmResponse string) (string, bool) {
+	intent := detectToolRequiredIntent(userMessage)
+	if intent == "" {
+		return "", false
+	}
+
+	if llmResponse == "" || looksLikeManualRefusal(llmResponse) {
+		switch intent {
+		case "schedule":
+			return "System enforcement: the user asked for a timer/reminder/scheduled notification. You MUST call the cron tool now (add action) and create the schedule, instead of asking the user to run scripts manually.", true
+		case "exec":
+			return "System enforcement: the user asked you to execute/operate commands. You MUST call tools (exec/cron) now and perform the task directly when safety guards allow. Do not output manual copy-paste steps.", true
+		}
+	}
+	return "", false
+}
+
+func detectToolRequiredIntent(s string) string {
+	v := strings.ToLower(strings.TrimSpace(s))
+	if v == "" {
+		return ""
+	}
+
+	scheduleKeywords := []string{
+		"remind", "reminder", "timer", "schedule", "cron", "notify", "notification",
+		"定时", "提醒", "闹钟", "通知", "每隔", "定时器",
+	}
+	for _, kw := range scheduleKeywords {
+		if strings.Contains(v, kw) {
+			return "schedule"
+		}
+	}
+
+	execKeywords := []string{
+		"run ", "execute", "install", "deploy", "script", "command",
+		"运行", "执行", "安装", "部署", "脚本", "命令",
+	}
+	for _, kw := range execKeywords {
+		if strings.Contains(v, kw) {
+			return "exec"
+		}
+	}
+
+	return ""
+}
+
+func looksLikeManualRefusal(s string) bool {
+	v := strings.ToLower(strings.TrimSpace(s))
+	if v == "" {
+		return true
+	}
+
+	markers := []string{
+		"你只需", "请手动", "复制以下命令", "无法直接在这里", "当前环境不支持", "终端交互输入",
+		"security policy", "i cannot directly", "cannot directly", "run this in your terminal",
+		"copy and run", "manually run", "unsupported input", "input is not supported",
+	}
+	for _, m := range markers {
+		if strings.Contains(v, m) {
+			return true
+		}
+	}
+	return false
+}
+
 // selectCandidates returns the model candidates and resolved model name to use
 // for a conversation turn. When model routing is configured and the incoming
 // message scores below the complexity threshold, it returns the light model
@@ -1446,6 +1536,19 @@ func (al *AgentLoop) selectCandidates(
 			"threshold":   agent.Router.Threshold(),
 		})
 	return agent.LightCandidates, agent.Router.LightModel()
+}
+
+// updateToolContexts updates tools that cache channel/chatID context.
+func (al *AgentLoop) updateToolContexts(agent *AgentInstance, channel, chatID string) {
+	for _, toolName := range []string{"message", "spawn", "subagent", "cron", "send_file"} {
+		tool, ok := agent.Tools.Get(toolName)
+		if !ok {
+			continue
+		}
+		if setter, ok := tool.(interface{ SetContext(channel, chatID string) }); ok {
+			setter.SetContext(channel, chatID)
+		}
+	}
 }
 
 // maybeSummarize triggers summarization if the session history exceeds thresholds.

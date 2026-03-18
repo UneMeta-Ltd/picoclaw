@@ -307,6 +307,19 @@ func (m *Manager) initChannels() error {
 		m.initChannel("irc", "IRC")
 	}
 
+	if m.config.Channels.Web.Enabled {
+		logger.DebugC("channels", "Attempting to initialize Web channel")
+		web, err := NewWebChannel(m.config.Channels.Web, m.bus)
+		if err != nil {
+			logger.ErrorCF("channels", "Failed to initialize Web channel", map[string]any{
+				"error": err.Error(),
+			})
+		} else {
+			m.channels["web"] = web
+			logger.InfoC("channels", "Web channel enabled successfully")
+		}
+	}
+
 	logger.InfoCF("channels", "Channel initialization completed", map[string]any{
 		"enabled_channels": len(m.channels),
 	})

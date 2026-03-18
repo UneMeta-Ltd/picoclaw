@@ -178,6 +178,10 @@ func (t *ExecTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "The shell command to execute",
 			},
+			"stdin": map[string]any{
+				"type":        "string",
+				"description": "Optional text piped to stdin. Useful for scripts that prompt for input.",
+			},
 			"working_dir": map[string]any{
 				"type":        "string",
 				"description": "Optional working directory for the command",
@@ -192,6 +196,7 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 	if !ok {
 		return ErrorResult("command is required")
 	}
+	stdin, _ := args["stdin"].(string)
 
 	// GHSA-pv8c-p6jf-3fpp: block exec from remote channels (e.g. Telegram webhooks)
 	// unless explicitly opted-in via config. Fail-closed: empty channel = blocked.
@@ -274,6 +279,9 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 	}
 
 	prepareCommandForTermination(cmd)
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

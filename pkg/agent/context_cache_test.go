@@ -126,6 +126,28 @@ func TestSingleSystemMessage(t *testing.T) {
 	}
 }
 
+func TestBuildMessagesIncludesTimezoneContext(t *testing.T) {
+	tmpDir := setupWorkspace(t, nil)
+	defer os.RemoveAll(tmpDir)
+
+	cb := NewContextBuilder(tmpDir, "Asia/Shanghai")
+	msgs := cb.BuildMessages(nil, "", "hello", nil, "telegram", "123")
+	if len(msgs) == 0 || msgs[0].Role != "system" {
+		t.Fatalf("expected first message to be system, got %#v", msgs)
+	}
+
+	sys := msgs[0].Content
+	if !strings.Contains(sys, "## Timezone\nAsia/Shanghai") {
+		t.Fatalf("system message missing timezone context: %s", sys)
+	}
+	if !strings.Contains(sys, "UTC:") {
+		t.Fatalf("system message missing UTC timestamp: %s", sys)
+	}
+	if !strings.Contains(sys, "Scheduling Guardrail") {
+		t.Fatalf("system message missing scheduling guardrail: %s", sys)
+	}
+}
+
 // TestMtimeAutoInvalidation verifies that the cache detects source file changes
 // via mtime without requiring explicit InvalidateCache().
 // Fix: original implementation had no auto-invalidation — edits to bootstrap files,
@@ -384,7 +406,7 @@ Updated content.`
 }
 
 // TestGlobalSkillFileContentChange verifies that modifying a global skill
-// (~/.picoclaw/skills) invalidates the cached system prompt.
+// (~/.meowclaw/skills) invalidates the cached system prompt.
 func TestGlobalSkillFileContentChange(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
@@ -392,7 +414,7 @@ func TestGlobalSkillFileContentChange(t *testing.T) {
 	tmpDir := setupWorkspace(t, nil)
 	defer os.RemoveAll(tmpDir)
 
-	globalSkillPath := filepath.Join(tmpHome, ".picoclaw", "skills", "global-skill", "SKILL.md")
+	globalSkillPath := filepath.Join(tmpHome, ".meowclaw", "skills", "global-skill", "SKILL.md")
 	if err := os.MkdirAll(filepath.Dir(globalSkillPath), 0o755); err != nil {
 		t.Fatal(err)
 	}

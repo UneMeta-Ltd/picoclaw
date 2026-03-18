@@ -39,7 +39,8 @@ func DefaultConfig() *Config {
 		},
 		Bindings: []AgentBinding{},
 		Session: SessionConfig{
-			DMScope: "per-channel-peer",
+			DMScope:  "per-channel-peer",
+			Timezone: "Asia/Shanghai",
 		},
 		Channels: ChannelsConfig{
 			WhatsApp: WhatsAppConfig{
@@ -165,6 +166,10 @@ func DefaultConfig() *Config {
 				ReplyTimeout:   5,
 				MaxSteps:       10,
 				WelcomeMessage: "Hello! I'm your AI assistant. How can I help you today?",
+			},
+			Web: WebConfig{
+				Enabled:   false,
+				AllowFrom: FlexibleStringSlice{},
 			},
 			Pico: PicoConfig{
 				Enabled:        false,
