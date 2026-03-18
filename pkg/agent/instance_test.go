@@ -1,10 +1,14 @@
 package agent
 
 import (
+	"context"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/media"
 )
 
 func TestNewAgentInstance_UsesDefaultsTemperatureAndMaxTokens(t *testing.T) {
@@ -95,75 +99,150 @@ func TestNewAgentInstance_DefaultsTemperatureWhenUnset(t *testing.T) {
 }
 
 func TestNewAgentInstance_ResolveCandidatesFromModelListAlias(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "agent-instance-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
-				Model:     "step-3.5-flash",
-			},
+	tests := []struct {
+		name         string
+		aliasName    string
+		modelName    string
+		apiBase      string
+		wantProvider string
+		wantModel    string
+	}{
+		{
+			name:         "alias with provider prefix",
+			aliasName:    "step-3.5-flash",
+			modelName:    "openrouter/stepfun/step-3.5-flash:free",
+			apiBase:      "https://openrouter.ai/api/v1",
+			wantProvider: "openrouter",
+			wantModel:    "stepfun/step-3.5-flash:free",
 		},
-		ModelList: []config.ModelConfig{
-			{
-				ModelName: "step-3.5-flash",
-				Model:     "openrouter/stepfun/step-3.5-flash:free",
-				APIBase:   "https://openrouter.ai/api/v1",
-			},
+		{
+			name:         "alias without provider prefix",
+			aliasName:    "glm-5",
+			modelName:    "glm-5",
+			apiBase:      "https://api.z.ai/api/coding/paas/v4",
+			wantProvider: "openai",
+			wantModel:    "glm-5",
 		},
 	}
 
-	provider := &mockProvider{}
-	agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, provider)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir, err := os.MkdirTemp("", "agent-instance-test-*")
+			if err != nil {
+				t.Fatalf("Failed to create temp dir: %v", err)
+			}
+			defer os.RemoveAll(tmpDir)
 
-	if len(agent.Candidates) != 1 {
-		t.Fatalf("len(Candidates) = %d, want 1", len(agent.Candidates))
-	}
-	if agent.Candidates[0].Provider != "openrouter" {
-		t.Fatalf("candidate provider = %q, want %q", agent.Candidates[0].Provider, "openrouter")
-	}
-	if agent.Candidates[0].Model != "stepfun/step-3.5-flash:free" {
-		t.Fatalf("candidate model = %q, want %q", agent.Candidates[0].Model, "stepfun/step-3.5-flash:free")
+			cfg := &config.Config{
+				Agents: config.AgentsConfig{
+					Defaults: config.AgentDefaults{
+						Workspace: tmpDir,
+						Model:     tt.aliasName,
+					},
+				},
+				ModelList: []config.ModelConfig{
+					{
+						ModelName: tt.aliasName,
+						Model:     tt.modelName,
+						APIBase:   tt.apiBase,
+					},
+				},
+			}
+
+			provider := &mockProvider{}
+			agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, provider)
+
+			if len(agent.Candidates) != 1 {
+				t.Fatalf("len(Candidates) = %d, want 1", len(agent.Candidates))
+			}
+			if agent.Candidates[0].Provider != tt.wantProvider {
+				t.Fatalf("candidate provider = %q, want %q", agent.Candidates[0].Provider, tt.wantProvider)
+			}
+			if agent.Candidates[0].Model != tt.wantModel {
+				t.Fatalf("candidate model = %q, want %q", agent.Candidates[0].Model, tt.wantModel)
+			}
+		})
 	}
 }
 
-func TestNewAgentInstance_ResolveCandidatesFromModelListAliasWithoutProtocol(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "agent-instance-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
+func TestNewAgentInstance_AllowsMediaTempDirForReadListAndExec(t *testing.T) {
+	workspace := t.TempDir()
+	mediaDir := media.TempDir()
+	if err := os.MkdirAll(mediaDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(mediaDir) error = %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+
+	mediaFile, err := os.CreateTemp(mediaDir, "instance-tool-*.txt")
+	if err != nil {
+		t.Fatalf("CreateTemp(mediaDir) error = %v", err)
+	}
+	mediaPath := mediaFile.Name()
+	if _, err := mediaFile.WriteString("attachment content"); err != nil {
+		mediaFile.Close()
+		t.Fatalf("WriteString(mediaFile) error = %v", err)
+	}
+	if err := mediaFile.Close(); err != nil {
+		t.Fatalf("Close(mediaFile) error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(mediaPath) })
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
-				Model:     "glm-5",
+				Workspace:           workspace,
+				ModelName:           "test-model",
+				RestrictToWorkspace: true,
 			},
 		},
-		ModelList: []config.ModelConfig{
-			{
-				ModelName: "glm-5",
-				Model:     "glm-5",
-				APIBase:   "https://api.z.ai/api/coding/paas/v4",
+		Tools: config.ToolsConfig{
+			ReadFile: config.ReadFileToolConfig{Enabled: true},
+			ListDir:  config.ToolConfig{Enabled: true},
+			Exec: config.ExecConfig{
+				ToolConfig:         config.ToolConfig{Enabled: true},
+				EnableDenyPatterns: true,
+				AllowRemote:        true,
 			},
 		},
 	}
 
-	provider := &mockProvider{}
-	agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, provider)
+	agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, &mockProvider{})
 
-	if len(agent.Candidates) != 1 {
-		t.Fatalf("len(Candidates) = %d, want 1", len(agent.Candidates))
+	readTool, ok := agent.Tools.Get("read_file")
+	if !ok {
+		t.Fatal("read_file tool not registered")
 	}
-	if agent.Candidates[0].Provider != "openai" {
-		t.Fatalf("candidate provider = %q, want %q", agent.Candidates[0].Provider, "openai")
+	readResult := readTool.Execute(context.Background(), map[string]any{"path": mediaPath})
+	if readResult.IsError {
+		t.Fatalf("read_file should allow media temp dir, got: %s", readResult.ForLLM)
 	}
-	if agent.Candidates[0].Model != "glm-5" {
-		t.Fatalf("candidate model = %q, want %q", agent.Candidates[0].Model, "glm-5")
+	if !strings.Contains(readResult.ForLLM, "attachment content") {
+		t.Fatalf("read_file output missing media content: %s", readResult.ForLLM)
+	}
+
+	listTool, ok := agent.Tools.Get("list_dir")
+	if !ok {
+		t.Fatal("list_dir tool not registered")
+	}
+	listResult := listTool.Execute(context.Background(), map[string]any{"path": mediaDir})
+	if listResult.IsError {
+		t.Fatalf("list_dir should allow media temp dir, got: %s", listResult.ForLLM)
+	}
+	if !strings.Contains(listResult.ForLLM, filepath.Base(mediaPath)) {
+		t.Fatalf("list_dir output missing media file: %s", listResult.ForLLM)
+	}
+
+	execTool, ok := agent.Tools.Get("exec")
+	if !ok {
+		t.Fatal("exec tool not registered")
+	}
+	execResult := execTool.Execute(context.Background(), map[string]any{
+		"command":     "cat " + filepath.Base(mediaPath),
+		"working_dir": mediaDir,
+	})
+	if execResult.IsError {
+		t.Fatalf("exec should allow media temp dir, got: %s", execResult.ForLLM)
+	}
+	if !strings.Contains(execResult.ForLLM, "attachment content") {
+		t.Fatalf("exec output missing media content: %s", execResult.ForLLM)
 	}
 }

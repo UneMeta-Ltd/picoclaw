@@ -61,7 +61,10 @@ var channelRateConfig = map[string]float64{
 	"telegram": 20,
 	"discord":  1,
 	"slack":    1,
+	"matrix":   2,
 	"line":     10,
+	"qq":       5,
+	"irc":      2,
 }
 
 type channelWorker struct {
@@ -99,11 +102,37 @@ func (m *Manager) RecordPlaceholder(channel, chatID, placeholderID string) {
 	m.placeholders.Store(key, placeholderEntry{id: placeholderID, createdAt: time.Now()})
 }
 
+// SendPlaceholder sends a "Thinking…" placeholder for the given channel/chatID
+// and records it for later editing. Returns true if a placeholder was sent.
+func (m *Manager) SendPlaceholder(ctx context.Context, channel, chatID string) bool {
+	m.mu.RLock()
+	ch, ok := m.channels[channel]
+	m.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	pc, ok := ch.(PlaceholderCapable)
+	if !ok {
+		return false
+	}
+	phID, err := pc.SendPlaceholder(ctx, chatID)
+	if err != nil || phID == "" {
+		return false
+	}
+	m.RecordPlaceholder(channel, chatID, phID)
+	return true
+}
+
 // RecordTypingStop registers a typing stop function for later invocation.
 // Implements PlaceholderRecorder.
 func (m *Manager) RecordTypingStop(channel, chatID string, stop func()) {
 	key := channel + ":" + chatID
-	m.typingStops.Store(key, typingEntry{stop: stop, createdAt: time.Now()})
+	entry := typingEntry{stop: stop, createdAt: time.Now()}
+	if previous, loaded := m.typingStops.Swap(key, entry); loaded {
+		if oldEntry, ok := previous.(typingEntry); ok && oldEntry.stop != nil {
+			oldEntry.stop()
+		}
+	}
 }
 
 // RecordReactionUndo registers a reaction undo function for later invocation.
@@ -243,6 +272,13 @@ func (m *Manager) initChannels() error {
 		m.initChannel("slack", "Slack")
 	}
 
+	if m.config.Channels.Matrix.Enabled &&
+		m.config.Channels.Matrix.Homeserver != "" &&
+		m.config.Channels.Matrix.UserID != "" &&
+		m.config.Channels.Matrix.AccessToken != "" {
+		m.initChannel("matrix", "Matrix")
+	}
+
 	if m.config.Channels.LINE.Enabled && m.config.Channels.LINE.ChannelAccessToken != "" {
 		m.initChannel("line", "LINE")
 	}
@@ -255,12 +291,20 @@ func (m *Manager) initChannels() error {
 		m.initChannel("wecom", "WeCom")
 	}
 
+	if m.config.Channels.WeComAIBot.Enabled && m.config.Channels.WeComAIBot.Token != "" {
+		m.initChannel("wecom_aibot", "WeCom AI Bot")
+	}
+
 	if m.config.Channels.WeComApp.Enabled && m.config.Channels.WeComApp.CorpID != "" {
 		m.initChannel("wecom_app", "WeCom App")
 	}
 
 	if m.config.Channels.Pico.Enabled && m.config.Channels.Pico.Token != "" {
 		m.initChannel("pico", "Pico")
+	}
+
+	if m.config.Channels.IRC.Enabled && m.config.Channels.IRC.Server != "" {
+		m.initChannel("irc", "IRC")
 	}
 
 	logger.InfoCF("channels", "Channel initialization completed", map[string]any{
@@ -313,7 +357,6 @@ func (m *Manager) StartAll(ctx context.Context) error {
 
 	if len(m.channels) == 0 {
 		logger.WarnC("channels", "No channels enabled")
-		return errors.New("no channels enabled")
 	}
 
 	logger.InfoC("channels", "Starting all channels")
@@ -353,7 +396,7 @@ func (m *Manager) StartAll(ctx context.Context) error {
 				"addr": m.httpServer.Addr,
 			})
 			if err := m.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				logger.ErrorCF("channels", "Shared HTTP server error", map[string]any{
+				logger.FatalCF("channels", "Shared HTTP server error", map[string]any{
 					"error": err.Error(),
 				})
 			}
@@ -539,86 +582,94 @@ func (m *Manager) sendWithRetry(ctx context.Context, name string, w *channelWork
 	})
 }
 
-func (m *Manager) dispatchOutbound(ctx context.Context) {
-	logger.InfoC("channels", "Outbound dispatcher started")
+func dispatchLoop[M any](
+	ctx context.Context,
+	m *Manager,
+	ch <-chan M,
+	getChannel func(M) string,
+	enqueue func(context.Context, *channelWorker, M) bool,
+	startMsg, stopMsg, unknownMsg, noWorkerMsg string,
+) {
+	logger.InfoC("channels", startMsg)
 
 	for {
-		msg, ok := m.bus.SubscribeOutbound(ctx)
-		if !ok {
-			logger.InfoC("channels", "Outbound dispatcher stopped")
+		select {
+		case <-ctx.Done():
+			logger.InfoC("channels", stopMsg)
 			return
-		}
 
-		// Silently skip internal channels
-		if constants.IsInternalChannel(msg.Channel) {
-			continue
-		}
-
-		m.mu.RLock()
-		_, exists := m.channels[msg.Channel]
-		w, wExists := m.workers[msg.Channel]
-		m.mu.RUnlock()
-
-		if !exists {
-			logger.WarnCF("channels", "Unknown channel for outbound message", map[string]any{
-				"channel": msg.Channel,
-			})
-			continue
-		}
-
-		if wExists && w != nil {
-			select {
-			case w.queue <- msg:
-			case <-ctx.Done():
+		case msg, ok := <-ch:
+			if !ok {
+				logger.InfoC("channels", stopMsg)
 				return
 			}
-		} else if exists {
-			logger.WarnCF("channels", "Channel has no active worker, skipping message", map[string]any{
-				"channel": msg.Channel,
-			})
+
+			channel := getChannel(msg)
+
+			// Silently skip internal channels
+			if constants.IsInternalChannel(channel) {
+				continue
+			}
+
+			m.mu.RLock()
+			_, exists := m.channels[channel]
+			w, wExists := m.workers[channel]
+			m.mu.RUnlock()
+
+			if !exists {
+				logger.WarnCF("channels", unknownMsg, map[string]any{"channel": channel})
+				continue
+			}
+
+			if wExists && w != nil {
+				if !enqueue(ctx, w, msg) {
+					return
+				}
+			} else if exists {
+				logger.WarnCF("channels", noWorkerMsg, map[string]any{"channel": channel})
+			}
 		}
 	}
 }
 
+func (m *Manager) dispatchOutbound(ctx context.Context) {
+	dispatchLoop(
+		ctx, m,
+		m.bus.OutboundChan(),
+		func(msg bus.OutboundMessage) string { return msg.Channel },
+		func(ctx context.Context, w *channelWorker, msg bus.OutboundMessage) bool {
+			select {
+			case w.queue <- msg:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		},
+		"Outbound dispatcher started",
+		"Outbound dispatcher stopped",
+		"Unknown channel for outbound message",
+		"Channel has no active worker, skipping message",
+	)
+}
+
 func (m *Manager) dispatchOutboundMedia(ctx context.Context) {
-	logger.InfoC("channels", "Outbound media dispatcher started")
-
-	for {
-		msg, ok := m.bus.SubscribeOutboundMedia(ctx)
-		if !ok {
-			logger.InfoC("channels", "Outbound media dispatcher stopped")
-			return
-		}
-
-		// Silently skip internal channels
-		if constants.IsInternalChannel(msg.Channel) {
-			continue
-		}
-
-		m.mu.RLock()
-		_, exists := m.channels[msg.Channel]
-		w, wExists := m.workers[msg.Channel]
-		m.mu.RUnlock()
-
-		if !exists {
-			logger.WarnCF("channels", "Unknown channel for outbound media message", map[string]any{
-				"channel": msg.Channel,
-			})
-			continue
-		}
-
-		if wExists && w != nil {
+	dispatchLoop(
+		ctx, m,
+		m.bus.OutboundMediaChan(),
+		func(msg bus.OutboundMediaMessage) string { return msg.Channel },
+		func(ctx context.Context, w *channelWorker, msg bus.OutboundMediaMessage) bool {
 			select {
 			case w.mediaQueue <- msg:
+				return true
 			case <-ctx.Done():
-				return
+				return false
 			}
-		} else if exists {
-			logger.WarnCF("channels", "Channel has no active worker, skipping media message", map[string]any{
-				"channel": msg.Channel,
-			})
-		}
-	}
+		},
+		"Outbound media dispatcher started",
+		"Outbound media dispatcher stopped",
+		"Unknown channel for outbound media message",
+		"Channel has no active worker, skipping media message",
+	)
 }
 
 // runMediaWorker processes outbound media messages for a single channel.
@@ -791,6 +842,39 @@ func (m *Manager) UnregisterChannel(name string) {
 	}
 	delete(m.workers, name)
 	delete(m.channels, name)
+}
+
+// SendMessage sends an outbound message synchronously through the channel
+// worker's rate limiter and retry logic. It blocks until the message is
+// delivered (or all retries are exhausted), which preserves ordering when
+// a subsequent operation depends on the message having been sent.
+func (m *Manager) SendMessage(ctx context.Context, msg bus.OutboundMessage) error {
+	m.mu.RLock()
+	_, exists := m.channels[msg.Channel]
+	w, wExists := m.workers[msg.Channel]
+	m.mu.RUnlock()
+
+	if !exists {
+		return fmt.Errorf("channel %s not found", msg.Channel)
+	}
+	if !wExists || w == nil {
+		return fmt.Errorf("channel %s has no active worker", msg.Channel)
+	}
+
+	maxLen := 0
+	if mlp, ok := w.ch.(MessageLengthProvider); ok {
+		maxLen = mlp.MaxMessageLength()
+	}
+	if maxLen > 0 && len([]rune(msg.Content)) > maxLen {
+		for _, chunk := range SplitMessage(msg.Content, maxLen) {
+			chunkMsg := msg
+			chunkMsg.Content = chunk
+			m.sendWithRetry(ctx, msg.Channel, w, chunkMsg)
+		}
+	} else {
+		m.sendWithRetry(ctx, msg.Channel, w, msg)
+	}
+	return nil
 }
 
 func (m *Manager) SendToChannel(ctx context.Context, channelName, chatID, content string) error {

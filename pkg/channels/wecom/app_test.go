@@ -209,7 +209,7 @@ func TestWeComAppVerifySignature(t *testing.T) {
 		}
 	})
 
-	t.Run("empty token skips verification", func(t *testing.T) {
+	t.Run("empty token rejects verification (fail-closed)", func(t *testing.T) {
 		cfgEmpty := config.WeComAppConfig{
 			CorpID:     "test_corp_id",
 			CorpSecret: "test_secret",
@@ -218,8 +218,8 @@ func TestWeComAppVerifySignature(t *testing.T) {
 		}
 		chEmpty, _ := NewWeComAppChannel(cfgEmpty, msgBus)
 
-		if !verifySignature(chEmpty.config.Token, "any_sig", "any_ts", "any_nonce", "any_msg") {
-			t.Error("empty token should skip verification and return true")
+		if verifySignature(chEmpty.config.Token, "any_sig", "any_ts", "any_nonce", "any_msg") {
+			t.Error("empty token should reject verification (fail-closed)")
 		}
 	})
 }
@@ -321,60 +321,6 @@ func TestWeComAppDecryptMessage(t *testing.T) {
 			t.Error("expected error for short ciphertext, got nil")
 		}
 	})
-}
-
-func TestWeComAppPKCS7Unpad(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    []byte
-		expected []byte
-	}{
-		{
-			name:     "empty input",
-			input:    []byte{},
-			expected: []byte{},
-		},
-		{
-			name:     "valid padding 3 bytes",
-			input:    append([]byte("hello"), bytes.Repeat([]byte{3}, 3)...),
-			expected: []byte("hello"),
-		},
-		{
-			name:     "valid padding 16 bytes (full block)",
-			input:    append([]byte("123456789012345"), bytes.Repeat([]byte{16}, 16)...),
-			expected: []byte("123456789012345"),
-		},
-		{
-			name:     "invalid padding larger than data",
-			input:    []byte{20},
-			expected: nil, // should return error
-		},
-		{
-			name:     "invalid padding zero",
-			input:    append([]byte("test"), byte(0)),
-			expected: nil, // should return error
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, err := pkcs7Unpad(tt.input)
-			if tt.expected == nil {
-				// This case should return an error
-				if err == nil {
-					t.Errorf("pkcs7Unpad() expected error for invalid padding, got result: %v", result)
-				}
-				return
-			}
-			if err != nil {
-				t.Errorf("pkcs7Unpad() unexpected error: %v", err)
-				return
-			}
-			if !bytes.Equal(result, tt.expected) {
-				t.Errorf("pkcs7Unpad() = %v, want %v", result, tt.expected)
-			}
-		})
-	}
 }
 
 func TestWeComAppHandleVerification(t *testing.T) {
