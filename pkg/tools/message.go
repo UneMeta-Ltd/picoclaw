@@ -11,6 +11,7 @@ type MessageTool struct {
 	sendCallback   SendCallback
 	defaultChannel string
 	defaultChatID  string
+	defaultLocale  string
 	sentInRound    bool // Tracks whether a message was sent in the current processing round
 }
 
@@ -51,6 +52,14 @@ func (t *MessageTool) SetContext(channel, chatID string) {
 	t.defaultChannel = channel
 	t.defaultChatID = chatID
 	t.sentInRound = false // Reset send tracking for new processing round
+}
+
+func (t *MessageTool) SetLocale(locale string) {
+	t.defaultLocale = locale
+}
+
+func (t *MessageTool) Locale() string {
+	return t.defaultLocale
 }
 
 // HasSentInRound returns true if the message tool sent a message during the current round.

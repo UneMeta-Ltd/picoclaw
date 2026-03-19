@@ -49,6 +49,7 @@ type processOptions struct {
 	SessionKey      string // Session identifier for history/context
 	Channel         string // Target channel for tool execution
 	ChatID          string // Target chat ID for tool execution
+	Locale          string // Preferred locale for user-facing fallback/system messages
 	UserMessage     string // User message content (may include prefix)
 	DefaultResponse string // Response when LLM returns empty
 	EnableSummary   bool   // Whether to trigger summarization
@@ -57,6 +58,18 @@ type processOptions struct {
 }
 
 const defaultResponse = "I've completed processing but have no response to give. Increase `max_tool_iterations` in config.json."
+
+func resolveInboundLocale(metadata map[string]string) string {
+	if len(metadata) == 0 {
+		return channels.NormalizeMessageLocale("")
+	}
+	for _, key := range []string{"locale", "language_code", "language", "lang"} {
+		if value := strings.TrimSpace(metadata[key]); value != "" {
+			return channels.NormalizeMessageLocale(value)
+		}
+	}
+	return channels.NormalizeMessageLocale("")
+}
 
 func NewAgentLoop(cfg *config.Config, msgBus *bus.MessageBus, provider providers.LLMProvider) *AgentLoop {
 	registry := NewAgentRegistry(cfg, provider)
@@ -131,6 +144,7 @@ func registerSharedTools(
 				Channel: channel,
 				ChatID:  chatID,
 				Content: content,
+				Locale:  messageTool.Locale(),
 			})
 		})
 		agent.Tools.Register(messageTool)
@@ -202,6 +216,7 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 					if defaultAgent != nil {
 						if tool, ok := defaultAgent.Tools.Get("message"); ok {
 							if mt, ok := tool.(*tools.MessageTool); ok {
+								mt.SetLocale(resolveInboundLocale(msg.Metadata))
 								alreadySent = mt.HasSentInRound()
 							}
 						}
@@ -212,6 +227,7 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 							Channel: msg.Channel,
 							ChatID:  msg.ChatID,
 							Content: response,
+							Locale:  resolveInboundLocale(msg.Metadata),
 						})
 						logger.InfoCF("agent", "Published outbound response",
 							map[string]any{
@@ -390,6 +406,9 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		if mt, ok := tool.(tools.ContextualTool); ok {
 			mt.SetContext(msg.Channel, msg.ChatID)
 		}
+		if mt, ok := tool.(*tools.MessageTool); ok {
+			mt.SetLocale(resolveInboundLocale(msg.Metadata))
+		}
 	}
 
 	// Use routed session key, but honor pre-set agent-scoped keys (for ProcessDirect/cron)
@@ -409,6 +428,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		SessionKey:      sessionKey,
 		Channel:         msg.Channel,
 		ChatID:          msg.ChatID,
+		Locale:          resolveInboundLocale(msg.Metadata),
 		UserMessage:     msg.Content,
 		DefaultResponse: defaultResponse,
 		EnableSummary:   true,
@@ -539,6 +559,7 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, agent *AgentInstance, opt
 			Channel: opts.Channel,
 			ChatID:  opts.ChatID,
 			Content: finalContent,
+			Locale:  opts.Locale,
 		})
 	}
 
@@ -565,7 +586,7 @@ func (al *AgentLoop) targetReasoningChannelID(channelName string) (chatID string
 	return ""
 }
 
-func (al *AgentLoop) handleReasoning(ctx context.Context, reasoningContent, channelName, channelID string) {
+func (al *AgentLoop) handleReasoning(ctx context.Context, reasoningContent, channelName, channelID, locale string) {
 	if reasoningContent == "" || channelName == "" || channelID == "" {
 		return
 	}
@@ -586,6 +607,7 @@ func (al *AgentLoop) handleReasoning(ctx context.Context, reasoningContent, chan
 		Channel: channelName,
 		ChatID:  channelID,
 		Content: reasoningContent,
+		Locale:  locale,
 	}); err != nil {
 		// Treat context.DeadlineExceeded / context.Canceled as expected
 		// (bus full under load, or parent canceled).  Check the error
@@ -735,6 +757,7 @@ func (al *AgentLoop) runLLMIteration(
 						Channel: opts.Channel,
 						ChatID:  opts.ChatID,
 						Content: "Context window exceeded. Compressing history and retrying...",
+						Locale:  opts.Locale,
 					})
 				}
 
@@ -760,7 +783,7 @@ func (al *AgentLoop) runLLMIteration(
 			return "", iteration, fmt.Errorf("LLM call failed after retries: %w", err)
 		}
 
-		go al.handleReasoning(ctx, response.Reasoning, opts.Channel, al.targetReasoningChannelID(opts.Channel))
+		go al.handleReasoning(ctx, response.Reasoning, opts.Channel, al.targetReasoningChannelID(opts.Channel), opts.Locale)
 
 		logger.DebugCF("agent", "LLM response",
 			map[string]any{
@@ -894,6 +917,7 @@ func (al *AgentLoop) runLLMIteration(
 					Channel: opts.Channel,
 					ChatID:  opts.ChatID,
 					Content: toolResult.ForUser,
+					Locale:  opts.Locale,
 				})
 				logger.DebugCF("agent", "Sent tool result to user",
 					map[string]any{

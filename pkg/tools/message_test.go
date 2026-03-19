@@ -209,6 +209,15 @@ func TestMessageTool_Description(t *testing.T) {
 	}
 }
 
+func TestMessageTool_Locale(t *testing.T) {
+	tool := NewMessageTool()
+	tool.SetLocale("ja")
+
+	if got := tool.Locale(); got != "ja" {
+		t.Fatalf("expected locale 'ja', got %q", got)
+	}
+}
+
 func TestMessageTool_Parameters(t *testing.T) {
 	tool := NewMessageTool()
 	params := tool.Parameters()

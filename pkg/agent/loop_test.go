@@ -737,7 +737,7 @@ func TestHandleReasoning(t *testing.T) {
 
 	t.Run("skips when any required field is empty", func(t *testing.T) {
 		al, msgBus := newLoop(t)
-		al.handleReasoning(context.Background(), "reasoning", "telegram", "")
+		al.handleReasoning(context.Background(), "reasoning", "telegram", "", "")
 
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 		defer cancel()
@@ -748,7 +748,7 @@ func TestHandleReasoning(t *testing.T) {
 
 	t.Run("publishes one message for non telegram", func(t *testing.T) {
 		al, msgBus := newLoop(t)
-		al.handleReasoning(context.Background(), "hello reasoning", "slack", "channel-1")
+		al.handleReasoning(context.Background(), "hello reasoning", "slack", "channel-1", "")
 
 		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 		defer cancel()
@@ -764,7 +764,7 @@ func TestHandleReasoning(t *testing.T) {
 	t.Run("publishes one message for telegram", func(t *testing.T) {
 		al, msgBus := newLoop(t)
 		reasoning := "hello telegram reasoning"
-		al.handleReasoning(context.Background(), reasoning, "telegram", "tg-chat")
+		al.handleReasoning(context.Background(), reasoning, "telegram", "tg-chat", "")
 
 		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 		defer cancel()
@@ -788,7 +788,7 @@ func TestHandleReasoning(t *testing.T) {
 		reasoning := "hello telegram reasoning"
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		al.handleReasoning(ctx, reasoning, "telegram", "tg-chat")
+		al.handleReasoning(ctx, reasoning, "telegram", "tg-chat", "")
 
 		ctx, cancel = context.WithTimeout(context.Background(), 200*time.Millisecond)
 		defer cancel()
@@ -823,7 +823,7 @@ func TestHandleReasoning(t *testing.T) {
 		defer cancel()
 
 		start := time.Now()
-		al.handleReasoning(ctx, "should timeout", "slack", "channel-full")
+		al.handleReasoning(ctx, "should timeout", "slack", "channel-full", "")
 		elapsed := time.Since(start)
 
 		// handleReasoning uses a 5s internal timeout, but the parent ctx

@@ -498,6 +498,9 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 		"first_name": user.FirstName,
 		"is_group":   fmt.Sprintf("%t", message.Chat.Type != "private"),
 	}
+	if languageCode := strings.TrimSpace(user.LanguageCode); languageCode != "" {
+		metadata["locale"] = languageCode
+	}
 
 	c.HandleMessage(c.ctx,
 		peer,
