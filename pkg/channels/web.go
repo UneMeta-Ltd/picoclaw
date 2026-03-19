@@ -163,6 +163,7 @@ func (w *WebChannel) handleChat(wr http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Message   string `json:"message"`
 		SessionID string `json:"session_id"`
+		Locale    string `json:"locale"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(wr, "invalid request body", http.StatusBadRequest)
@@ -191,11 +192,16 @@ func (w *WebChannel) handleChat(wr http.ResponseWriter, r *http.Request) {
 	wr.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
+	metadata := map[string]string{}
+	if locale := strings.TrimSpace(body.Locale); locale != "" {
+		metadata["locale"] = locale
+	}
+
 	// Publish inbound message to the bus.
 	w.BaseChannel.HandleMessage(r.Context(),
 		bus.Peer{Kind: "direct", ID: body.SessionID},
 		requestID, body.SessionID, chatID, body.Message,
-		nil, nil,
+		nil, metadata,
 	)
 
 	timeout := time.After(120 * time.Second)

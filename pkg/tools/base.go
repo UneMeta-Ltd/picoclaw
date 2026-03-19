@@ -23,6 +23,7 @@ type toolCtxKey struct{ name string }
 var (
 	ctxKeyChannel = &toolCtxKey{"channel"}
 	ctxKeyChatID  = &toolCtxKey{"chatID"}
+	ctxKeyLocale  = &toolCtxKey{"locale"}
 )
 
 // WithToolContext returns a child context carrying channel and chatID.
@@ -30,6 +31,11 @@ func WithToolContext(ctx context.Context, channel, chatID string) context.Contex
 	ctx = context.WithValue(ctx, ctxKeyChannel, channel)
 	ctx = context.WithValue(ctx, ctxKeyChatID, chatID)
 	return ctx
+}
+
+// WithToolLocale returns a child context carrying locale.
+func WithToolLocale(ctx context.Context, locale string) context.Context {
+	return context.WithValue(ctx, ctxKeyLocale, locale)
 }
 
 // ToolChannel extracts the channel from ctx, or "" if unset.
@@ -41,6 +47,12 @@ func ToolChannel(ctx context.Context) string {
 // ToolChatID extracts the chatID from ctx, or "" if unset.
 func ToolChatID(ctx context.Context) string {
 	v, _ := ctx.Value(ctxKeyChatID).(string)
+	return v
+}
+
+// ToolLocale extracts the locale from ctx, or "" if unset.
+func ToolLocale(ctx context.Context) string {
+	v, _ := ctx.Value(ctxKeyLocale).(string)
 	return v
 }
 

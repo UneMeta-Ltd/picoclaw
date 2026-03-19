@@ -7,10 +7,10 @@ import (
 )
 
 const (
-	OutboundErrorMarkerPrefix      = "__MEOWCLAW_ERROR__:"
-	OutboundErrorQuotaExhausted    = "quota_exhausted"
-	OutboundErrorSessionExpired    = "session_expired"
-	OutboundErrorResponseTimedOut  = "response_timed_out"
+	OutboundErrorMarkerPrefix       = "__MEOWCLAW_ERROR__:"
+	OutboundErrorQuotaExhausted     = "quota_exhausted"
+	OutboundErrorSessionExpired     = "session_expired"
+	OutboundErrorResponseTimedOut   = "response_timed_out"
 	OutboundErrorServiceUnavailable = "service_unavailable"
 )
 
@@ -69,7 +69,59 @@ func ClassifyUserFacingOutboundError(content string) (string, bool) {
 	}
 }
 
-func TransformUserFacingOutboundContent(channel, content string) string {
+func NormalizeMessageLocale(locale string) string {
+	normalized := strings.ToLower(strings.TrimSpace(locale))
+	switch {
+	case normalized == "":
+		return "en"
+	case strings.HasPrefix(normalized, "zh"):
+		return "zh-CN"
+	case strings.HasPrefix(normalized, "ja"), strings.HasPrefix(normalized, "jp"):
+		return "ja"
+	default:
+		return "en"
+	}
+}
+
+func friendlyOutboundErrorMessage(code, locale string) string {
+	switch NormalizeMessageLocale(locale) {
+	case "zh-CN":
+		switch code {
+		case OutboundErrorQuotaExhausted:
+			return "喵～当前可用额度已用尽，请充值后继续使用。"
+		case OutboundErrorSessionExpired:
+			return "喵～我刚刚没有顺利同步这次会话，请稍后再试。"
+		case OutboundErrorResponseTimedOut:
+			return "喵～我这次回复超时了，请稍后再试。"
+		default:
+			return "喵～我刚刚没有顺利处理这条消息，请稍后再试。"
+		}
+	case "ja":
+		switch code {
+		case OutboundErrorQuotaExhausted:
+			return "にゃん、現在の利用可能クレジットを使い切りました。チャージ後にもう一度お試しください。"
+		case OutboundErrorSessionExpired:
+			return "にゃん、この会話の同期に失敗しました。少し待ってからもう一度お試しください。"
+		case OutboundErrorResponseTimedOut:
+			return "にゃん、今回の応答はタイムアウトしました。少し待ってからもう一度お試しください。"
+		default:
+			return "にゃん、このメッセージをうまく処理できませんでした。少し待ってからもう一度お試しください。"
+		}
+	default:
+		switch code {
+		case OutboundErrorQuotaExhausted:
+			return "Your available credits are exhausted. Please top up to continue."
+		case OutboundErrorSessionExpired:
+			return "I couldn't sync this conversation just now. Please try again in a moment."
+		case OutboundErrorResponseTimedOut:
+			return "This response timed out. Please try again in a moment."
+		default:
+			return "I couldn't process that message just now. Please try again in a moment."
+		}
+	}
+}
+
+func TransformUserFacingOutboundContent(channel, locale, content string) string {
 	code, ok := ClassifyUserFacingOutboundError(content)
 	if !ok {
 		return content
@@ -77,15 +129,5 @@ func TransformUserFacingOutboundContent(channel, content string) string {
 	if strings.EqualFold(strings.TrimSpace(channel), "web") {
 		return OutboundErrorMarkerPrefix + code
 	}
-
-	switch code {
-	case OutboundErrorQuotaExhausted:
-		return "喵～当前可用额度已用尽，请充值后继续使用。"
-	case OutboundErrorSessionExpired:
-		return "喵～我刚刚没有顺利同步这次会话，请稍后再试。"
-	case OutboundErrorResponseTimedOut:
-		return "喵～我这次回复超时了，请稍后再试。"
-	default:
-		return "喵～我刚刚没有顺利处理这条消息，请稍后再试。"
-	}
+	return friendlyOutboundErrorMessage(code, locale)
 }

@@ -696,6 +696,7 @@ func TestSendWithRetry_TransformsFriendlyErrorForChannel(t *testing.T) {
 	msg := bus.OutboundMessage{
 		Channel: "telegram",
 		ChatID:  "1",
+		Locale:  "zh-CN",
 		Content: `Error processing message: API request failed:
   Status: 402
   Body:   {"error":"quota_exhausted","message":"credits exhausted"}`,
@@ -726,6 +727,7 @@ func TestSendWithRetry_TransformsWebErrorMarker(t *testing.T) {
 	msg := bus.OutboundMessage{
 		Channel: "web",
 		ChatID:  "1",
+		Locale:  "ja",
 		Content: "Error processing message: upstream request failed",
 	}
 

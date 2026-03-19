@@ -565,6 +565,9 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 		"first_name": user.FirstName,
 		"is_group":   fmt.Sprintf("%t", message.Chat.Type != "private"),
 	}
+	if languageCode := strings.TrimSpace(user.LanguageCode); languageCode != "" {
+		metadata["locale"] = languageCode
+	}
 
 	// Set parent_peer metadata for per-topic agent binding.
 	if message.Chat.IsForum && threadID != 0 {
