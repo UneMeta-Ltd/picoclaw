@@ -20,6 +20,8 @@ import (
 const webChannelPort = 18791
 const webBroadcastChatID = "*"
 
+const webChannelErrorQuotaExhausted = "quota_exhausted"
+
 type chatMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
@@ -93,6 +95,9 @@ func (w *WebChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
 	}
 
 	w.deliverToPendingSession(sessionID, msg.Content)
+	if _, ok := classifyWebChannelError(msg.Content); ok {
+		return nil
+	}
 
 	if strings.TrimSpace(msg.Content) != "" {
 		w.appendHistory(sessionID, chatMessage{Role: "assistant", Content: msg.Content})
@@ -200,6 +205,13 @@ func (w *WebChannel) handleChat(wr http.ResponseWriter, r *http.Request) {
 	// Wait for the agent's response.
 	select {
 	case content := <-responseCh:
+		if code, ok := classifyWebChannelError(content); ok {
+			data, _ := json.Marshal(map[string]string{"error": code})
+			fmt.Fprintf(wr, "event: error\ndata: %s\n\n", data)
+			flusher.Flush()
+			return
+		}
+
 		data, _ := json.Marshal(map[string]string{"content": content})
 		fmt.Fprintf(wr, "data: %s\n\n", data)
 		flusher.Flush()
@@ -236,6 +248,22 @@ func (w *WebChannel) handleChat(wr http.ResponseWriter, r *http.Request) {
 
 	fmt.Fprintf(wr, "event: done\ndata: {}\n\n")
 	flusher.Flush()
+}
+
+func classifyWebChannelError(content string) (string, bool) {
+	trimmed := strings.TrimSpace(content)
+	lower := strings.ToLower(trimmed)
+	if !strings.HasPrefix(lower, "error processing message:") {
+		return "", false
+	}
+
+	if strings.Contains(lower, "quota_exhausted") ||
+		strings.Contains(lower, "pre_consume_token_quota_failed") ||
+		strings.Contains(lower, "token quota is not enough") {
+		return webChannelErrorQuotaExhausted, true
+	}
+
+	return "", false
 }
 
 func (w *WebChannel) handleHistory(wr http.ResponseWriter, r *http.Request) {

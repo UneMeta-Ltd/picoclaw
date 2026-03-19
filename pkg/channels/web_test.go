@@ -87,6 +87,54 @@ func TestWebChannelSend_DeliversToPendingStreamAndAppendsHistory(t *testing.T) {
 	}
 }
 
+func TestWebChannelSend_KnownErrorsDoNotAppendHistory(t *testing.T) {
+	t.Parallel()
+
+	w := &WebChannel{}
+	responseCh := make(chan string, 1)
+	w.pending.Store("session-error", responseCh)
+	defer w.pending.Delete("session-error")
+
+	content := `Error processing message: API request failed:
+  Status: 402
+  Body:   {"error":"quota_exhausted","message":"credits exhausted"}`
+	if err := w.Send(context.Background(), bus.OutboundMessage{
+		Channel: "web",
+		ChatID:  "session-error",
+		Content: content,
+	}); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	select {
+	case got := <-responseCh:
+		if got != content {
+			t.Fatalf("delivered content = %q, want original error content", got)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("did not receive pending error delivery")
+	}
+
+	history := w.getHistory("session-error")
+	if len(history) != 0 {
+		t.Fatalf("history len = %d, want 0", len(history))
+	}
+}
+
+func TestClassifyWebChannelError(t *testing.T) {
+	t.Parallel()
+
+	code, ok := classifyWebChannelError(`Error processing message: API request failed:
+  Status: 403
+  Body:   {"error":{"code":"pre_consume_token_quota_failed"}}`)
+	if !ok {
+		t.Fatal("expected error to be classified")
+	}
+	if code != webChannelErrorQuotaExhausted {
+		t.Fatalf("unexpected code: %q", code)
+	}
+}
+
 func TestWebChannelSend_BroadcastsToKnownSessions(t *testing.T) {
 	w := &WebChannel{}
 	w.appendHistory("session-a", chatMessage{Role: "user", Content: "hi"})
